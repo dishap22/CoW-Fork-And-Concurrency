@@ -23,9 +23,36 @@ struct {
   struct run *freelist;
 } kmem;
 
+struct {
+  struct spinlock lock;
+  int references[PHYSTOP >> PGSHIFT];
+} page_references;
+
+void inc_pg_ref(void *pa)
+{
+  acquire(&page_references.lock);
+  if (page_references.references[(uint64)pa >> PGSHIFT] < 0) {
+    panic("inc_pg_ref");
+  }
+  page_references.references[(uint64)pa >> PGSHIFT]++;
+  release(&page_references.lock);
+}
+
+void dec_pg_ref(void *pa)
+{
+  acquire(&page_references.lock);
+  if (page_references.references[(uint64)pa >> PGSHIFT] <= 0) {
+    panic("dec_pg_ref");
+  }
+  page_references.references[(uint64)pa >> PGSHIFT]--;
+  release(&page_references.lock);
+}
+
 void
 kinit()
 {
+  initlock(&page_references.lock, "page_references");
+  memset(page_references.references, 0, sizeof(page_references.references));
   initlock(&kmem.lock, "kmem");
   freerange(end, (void*)PHYSTOP);
 }
@@ -36,7 +63,12 @@ freerange(void *pa_start, void *pa_end)
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+  {
+    acquire(&page_references.lock);
+    page_references.references[(uint64)p >> PGSHIFT] = 1;
+    release(&page_references.lock);
     kfree(p);
+  }
 }
 
 // Free the page of physical memory pointed at by pa,
@@ -50,6 +82,16 @@ kfree(void *pa)
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
+
+  // decrease page references
+  // if we still have references, don't free the page
+  dec_pg_ref(pa);
+  acquire(&page_references.lock);
+  if (page_references.references[(uint64)pa >> PGSHIFT] > 0) {
+    release(&page_references.lock);
+    return;
+  }
+  release(&page_references.lock);
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -72,11 +114,19 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
+  if(r) 
     kmem.freelist = r->next;
   release(&kmem.lock);
 
   if(r)
+  {
     memset((char*)r, 5, PGSIZE); // fill with junk
+    acquire(&page_references.lock);
+    if (page_references.references[(uint64)r >> PGSHIFT] != 0) {
+      panic("kalloc");
+    }
+    release(&page_references.lock);
+    inc_pg_ref((void*)r);
+  }
   return (void*)r;
 }

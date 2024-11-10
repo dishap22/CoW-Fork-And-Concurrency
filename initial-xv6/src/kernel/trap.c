@@ -27,6 +27,34 @@ void trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+// page fault due to cow flag
+int cow_pagefault(pagetable_t pagetable, uint64 va)
+{
+  if (va >= MAXVA) return -1;
+
+  pte_t *pte = walk(pagetable, va, 0);
+  if (pte == 0)return -1;
+  if ((*pte & PTE_U) == 0)return -1; // pte doesn't exist
+  if ((*pte & PTE_V) == 0)return -1; // page not present
+  if (!(*pte & PTE_COW))return -1;   // not a cow page
+
+  uint64 oldpa = PTE2PA(*pte);
+  if (oldpa == 0)return -1;
+  uint64 newpa = (uint64) kalloc();
+  if (newpa == 0) {
+    printf("cow_pagefault: kalloc failed\n");
+    return -1;
+  }
+  memmove((void *)newpa, (void *)oldpa, PGSIZE);
+  kfree((void *)oldpa);
+
+  uint64 flags = PTE_FLAGS(*pte);
+  flags &= ~PTE_COW; // remove cow flag
+  flags |= PTE_W; // set flags for new page  
+  *pte = PA2PTE(newpa) | flags;
+  return 0;
+}
+
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -67,6 +95,11 @@ void usertrap(void)
   else if ((which_dev = devintr()) != 0)
   {
     // ok
+  }
+  else if (r_scause() == 15)
+  {
+    int r = cow_pagefault(p -> pagetable, r_stval());
+    if (r != 0) setkilled(p);
   }
   else
   {
