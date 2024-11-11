@@ -2,9 +2,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <unistd.h>
 
 #define THRESHOLD 42
-#define MAX_THREADS 4
+int MAX_THREADS;
 
 typedef struct {
     char name[129];
@@ -81,7 +82,7 @@ void *merge_sort(void *args) {
     if (left < right) {
         int mid = left + (right - left) / 2;
 
-        if (depth < MAX_THREADS) {
+        if ((1 << depth) < MAX_THREADS) {
             MergeSortArgs left_args = {files, left, mid, depth + 1, compare};
             MergeSortArgs right_args = {files, mid + 1, right, depth + 1, compare};
 
@@ -109,6 +110,8 @@ void distributed_merge_sort(File *files, int n, int (*compare)(const void *, con
 
 
 int main() {
+    MAX_THREADS = sysconf(_SC_NPROCESSORS_ONLN);
+
     int n;
     scanf("%d", &n);
 
