@@ -4,6 +4,7 @@
 #include <pthread.h>
 
 #define THRESHOLD 42
+#define MAX_THREADS 4 
 
 typedef struct {
     char name[129];
@@ -15,6 +16,8 @@ typedef struct {
     File *files;
     int left;
     int right;
+    int depth;
+    int (*compare)(const void *, const void *);
 } MergeSortArgs;
 
 int compare_by_name(const void *a, const void *b) {
@@ -72,20 +75,28 @@ void *merge_sort(void *args) {
     int left = ms_args->left;
     int right = ms_args->right;
     File *files = ms_args->files;
-    int (*compare)(const void *, const void *) = compare_by_id; // Default comparison, should be changed dynamically
+    int (*compare)(const void *, const void *) = ms_args->compare;
+    int depth = ms_args->depth;
 
     if (left < right) {
         int mid = left + (right - left) / 2;
 
-        MergeSortArgs left_args = {files, left, mid};
-        MergeSortArgs right_args = {files, mid + 1, right};
+        if (depth < MAX_THREADS) {
+            MergeSortArgs left_args = {files, left, mid, depth + 1, compare};
+            MergeSortArgs right_args = {files, mid + 1, right, depth + 1, compare};
 
-        pthread_t left_thread, right_thread;
-        pthread_create(&left_thread, NULL, merge_sort, &left_args);
-        pthread_create(&right_thread, NULL, merge_sort, &right_args);
+            pthread_t left_thread, right_thread;
+            pthread_create(&left_thread, NULL, merge_sort, &left_args);
+            pthread_create(&right_thread, NULL, merge_sort, &right_args);
 
-        pthread_join(left_thread, NULL);
-        pthread_join(right_thread, NULL);
+            pthread_join(left_thread, NULL);
+            pthread_join(right_thread, NULL);
+        } else {
+            MergeSortArgs left_args = {files, left, mid, depth, compare};
+            MergeSortArgs right_args = {files, mid + 1, right, depth, compare};
+            merge_sort(&left_args);
+            merge_sort(&right_args);
+        }
 
         merge(files, left, mid, right, compare);
     }
@@ -93,14 +104,20 @@ void *merge_sort(void *args) {
 }
 
 void distributed_merge_sort(File *files, int n, int (*compare)(const void *, const void *)) {
-    MergeSortArgs args = {files, 0, n - 1};
+    MergeSortArgs args = {files, 0, n - 1, 0, compare};
     merge_sort(&args);
 }
+
 
 int main() {
     int n;
     scanf("%d", &n);
+
     File *files = (File *)malloc(n * sizeof(File));
+    if (!files) {
+        fprintf(stderr, "Memory allocation failed.\n");
+        return 1;
+    }
 
     for (int i = 0; i < n; i++) {
         scanf("%s %d %s", files[i].name, &files[i].id, files[i].timestamp);
