@@ -4,7 +4,7 @@
 #include <pthread.h>
 
 #define THRESHOLD 42
-#define MAX_THREADS 4 
+#define MAX_THREADS 4
 
 typedef struct {
     char name[129];
@@ -87,10 +87,9 @@ void *merge_sort(void *args) {
 
             pthread_t left_thread, right_thread;
             pthread_create(&left_thread, NULL, merge_sort, &left_args);
-            pthread_create(&right_thread, NULL, merge_sort, &right_args);
+            merge_sort(&right_args);
 
             pthread_join(left_thread, NULL);
-            pthread_join(right_thread, NULL);
         } else {
             MergeSortArgs left_args = {files, left, mid, depth, compare};
             MergeSortArgs right_args = {files, mid + 1, right, depth, compare};
