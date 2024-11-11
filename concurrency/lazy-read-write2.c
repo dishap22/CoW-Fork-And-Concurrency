@@ -1,175 +1,165 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <pthread.h>
-#include <unistd.h>
 #include <string.h>
-#include <time.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <unistd.h>
 
-#define MAX_FILES 100
-#define MAX_USERS 100
-#define READ 0
-#define WRITE 1
-#define DELETE 2
-
-typedef struct {
-    int user_id;
-    int file_id;
-    int operation;
-    int request_time;
-} UserRequest;
+#define MAX_FILES 10
+#define MAX_REQUESTS 100
 
 typedef struct {
-    int read_time;
-    int write_time;
-    int delete_time;
-    int max_concurrent_users;
-    int max_wait_time;
-    int file_status[MAX_FILES]; // 0: deleted, 1: valid
-    pthread_mutex_t file_locks[MAX_FILES];
-    pthread_cond_t file_conditions[MAX_FILES];
-    int active_readers[MAX_FILES];
-    pthread_mutex_t read_write_lock[MAX_FILES];
-} FileManager;
+    int id;
+    int deleted;
+    int readers;
+    int writerActive;
+    pthread_mutex_t fileMutex;
+    sem_t fileSemaphore;
+} File;
 
-FileManager fm;
+typedef struct {
+    int userId;
+    int fileId;
+    char operation[10];
+    int arrivalTime;
+} Request;
 
-void* process_request(void* arg) {
-    UserRequest req = *(UserRequest*)arg;
-    free(arg);
+File files[MAX_FILES];
+Request requestQueue[MAX_REQUESTS];
+int requestCount = 0;
+int readTime, writeTime, deleteTime, maxConcurrentUsers, patienceTime;
 
-    sleep(1); // Simulate delay before processing
+pthread_mutex_t queueMutex = PTHREAD_MUTEX_INITIALIZER;
 
-    if (fm.file_status[req.file_id] == 0) {
-        printf("LAZY has declined the request of User %d at %d seconds because an invalid/deleted file was requested.\n", req.user_id, time(NULL));
+void* handleRequest(void* arg) {
+    Request* request = (Request*) arg;
+    int fileId = request->fileId - 1;
+    File* file = &files[fileId];
+
+    pthread_mutex_lock(&file->fileMutex);
+    printf("User %d has made request for performing %s on file %d at %d seconds [YELLOW]\n",
+           request->userId, request->operation, request->fileId, request->arrivalTime);
+    
+    sleep(1);  // Simulate LAZY wait time
+    
+    if (file->deleted) {
+        printf("LAZY has declined the request of User %d at %d seconds because an invalid/deleted file was requested. [WHITE]\n",
+               request->userId, request->arrivalTime + 1);
+        pthread_mutex_unlock(&file->fileMutex);
         return NULL;
     }
 
-    if (req.operation == READ) {
-        pthread_mutex_lock(&fm.read_write_lock[req.file_id]);
-        fm.active_readers[req.file_id]++;
-        pthread_mutex_unlock(&fm.read_write_lock[req.file_id]);
+    if (strcmp(request->operation, "READ") == 0) {
+        file->readers++;
+        printf("LAZY has taken up the request of User %d at %d seconds [PINK]\n", 
+               request->userId, request->arrivalTime + 1);
+        pthread_mutex_unlock(&file->fileMutex);
 
-        printf("LAZY has taken up the request of User %d at %d seconds.\n", req.user_id, time(NULL));
-        sleep(fm.read_time);
-        
-        pthread_mutex_lock(&fm.read_write_lock[req.file_id]);
-        fm.active_readers[req.file_id]--;
-        if (fm.active_readers[req.file_id] == 0) {
-            pthread_cond_broadcast(&fm.file_conditions[req.file_id]);
-        }
-        pthread_mutex_unlock(&fm.read_write_lock[req.file_id]);
-        
-        printf("The request for User %d was completed at %d seconds.\n", req.user_id, time(NULL));
-        
-    } else if (req.operation == WRITE) {
-        pthread_mutex_lock(&fm.read_write_lock[req.file_id]);
-        
-        // Wait until there are no active readers
-        while (fm.active_readers[req.file_id] > 0) {
-            pthread_cond_wait(&fm.file_conditions[req.file_id], &fm.read_write_lock[req.file_id]);
-        }
-        
-        printf("LAZY has taken up the request of User %d at %d seconds.\n", req.user_id, time(NULL));
-        sleep(fm.write_time);
-        
-        pthread_mutex_unlock(&fm.read_write_lock[req.file_id]);
-        
-        printf("The request for User %d was completed at %d seconds.\n", req.user_id, time(NULL));
-        
-    } else if (req.operation == DELETE) {
-        pthread_mutex_lock(&fm.read_write_lock[req.file_id]);
-        
-        // Wait until there are no active readers or writers
-        while (fm.active_readers[req.file_id] > 0) {
-            pthread_cond_wait(&fm.file_conditions[req.file_id], &fm.read_write_lock[req.file_id]);
-        }
+        sleep(readTime); // Simulate reading time
 
-        if (fm.file_status[req.file_id] == 1) { // Only delete if valid
-            fm.file_status[req.file_id] = 0; // Mark as deleted
-            printf("The request for User %d was completed at %d seconds.\n", req.user_id, time(NULL));
-        } else {
-            printf("LAZY has declined the request of User %d at %d seconds because an invalid/deleted file was requested.\n", req.user_id, time(NULL));
+        pthread_mutex_lock(&file->fileMutex);
+        file->readers--;
+        printf("The request for User %d was completed at %d seconds [GREEN]\n",
+               request->userId, request->arrivalTime + 1 + readTime);
+        pthread_mutex_unlock(&file->fileMutex);
+    }
+    else if (strcmp(request->operation, "WRITE") == 0) {
+        while (file->writerActive || file->readers > 0) {
+            pthread_mutex_unlock(&file->fileMutex);
+            sleep(1); // Wait until conditions allow for writing
+            pthread_mutex_lock(&file->fileMutex);
         }
-        
-        pthread_mutex_unlock(&fm.read_write_lock[req.file_id]);
+        file->writerActive = 1;
+        printf("LAZY has taken up the request of User %d at %d seconds [PINK]\n", 
+               request->userId, request->arrivalTime + 1);
+        pthread_mutex_unlock(&file->fileMutex);
+
+        sleep(writeTime); // Simulate writing time
+
+        pthread_mutex_lock(&file->fileMutex);
+        file->writerActive = 0;
+        printf("The request for User %d was completed at %d seconds [GREEN]\n",
+               request->userId, request->arrivalTime + 1 + writeTime);
+        pthread_mutex_unlock(&file->fileMutex);
+    }
+    else if (strcmp(request->operation, "DELETE") == 0) {
+        while (file->writerActive || file->readers > 0) {
+            pthread_mutex_unlock(&file->fileMutex);
+            sleep(1); // Wait until file can be deleted
+            pthread_mutex_lock(&file->fileMutex);
+        }
+        file->deleted = 1;
+        printf("LAZY has taken up the request of User %d at %d seconds [PINK]\n", 
+               request->userId, request->arrivalTime + 1);
+        printf("The request for User %d was completed at %d seconds [GREEN]\n",
+               request->userId, request->arrivalTime + 1 + deleteTime);
+        pthread_mutex_unlock(&file->fileMutex);
     }
 
     return NULL;
 }
 
-int main() {
-    // Initialize FileManager
-    memset(&fm, 0, sizeof(FileManager));
-    
-    // Read input parameters
-    int r, w, d, n, c, T;
-    
-    scanf("%d %d %d", &r, &w, &d);
-    scanf("%d %d %d", &n, &c, &T);
+void simulateLazy() {
+    printf("LAZY has woken up!\n");
+    pthread_t threads[MAX_REQUESTS];
 
-    fm.read_time = r;
-    fm.write_time = w;
-    fm.delete_time = d;
-    fm.max_concurrent_users = c;
-    fm.max_wait_time = T;
-
-    for (int i = 0; i < n; i++) {
-        fm.file_status[i] = 1; // Initialize files as valid
-        pthread_mutex_init(&fm.file_locks[i], NULL);
-        pthread_cond_init(&fm.file_conditions[i], NULL);
-        fm.active_readers[i] = 0; // No active readers initially
-        pthread_mutex_init(&fm.read_write_lock[i], NULL);
+    for (int i = 0; i < requestCount; i++) {
+        pthread_create(&threads[i], NULL, handleRequest, &requestQueue[i]);
+        sleep(1);  // Simulate request arrival time
     }
 
-    printf("LAZY has woken up!\n");
-
-    while (1) {
-        UserRequest* req = malloc(sizeof(UserRequest));
-        
-        // Read user requests
-        if (scanf("%d", &req->user_id) == EOF) break; // Stop on EOF
-        scanf("%d %d %d", &req->file_id, &req->operation, &req->request_time);
-
-        printf("User %d has made request for performing ", req->user_id);
-        
-        if (req->operation == READ) {
-            printf("READ on file %d at %d seconds [YELLOW]\n", req->file_id, req->request_time);
-            
-            // Simulate waiting time before processing cancellation
-            sleep(1); 
-            process_request(req);
-            
-        } else if (req->operation == WRITE) {
-            printf("WRITE on file %d at %d seconds [YELLOW]\n", req->file_id, req->request_time);
-            
-            // Simulate waiting time before processing cancellation
-            sleep(1); 
-            process_request(req);
-            
-        } else if (req->operation == DELETE) {
-            printf("DELETE on file %d at %d seconds [YELLOW]\n", req->file_id, req->request_time);
-            
-            // Simulate waiting time before processing cancellation
-            sleep(1); 
-            process_request(req);
-            
-            // Simulating user cancellation after processing delay
-            printf("User %d canceled the request due to no response at %ld seconds. [RED]\n", req->user_id, time(NULL));
-            
-        }
-
-        char stop[5];
-        scanf("%s", stop);
-        if (strcmp(stop, "STOP") == 0) break; // Stop on "STOP"
+    for (int i = 0; i < requestCount; i++) {
+        pthread_join(threads[i], NULL);
     }
 
     printf("LAZY has no more pending requests and is going back to sleep!\n");
+}
 
-    // Cleanup mutexes and conditions
-    for (int i = 0; i < n; i++) {
-        pthread_mutex_destroy(&fm.file_locks[i]);
-        pthread_cond_destroy(&fm.file_conditions[i]);
-        pthread_mutex_destroy(&fm.read_write_lock[i]);
+int main() {
+    printf("Enter the time taken for READ, WRITE, and DELETE operations:\n");
+    scanf("%d %d %d", &readTime, &writeTime, &deleteTime);
+
+    printf("Enter the number of files:\n");
+    int nFiles;
+    scanf("%d", &nFiles);
+
+    printf("Enter the maximum number of concurrent users per file:\n");
+    scanf("%d", &maxConcurrentUsers);
+
+    printf("Enter the maximum patience time for users (seconds):\n");
+    scanf("%d", &patienceTime);
+
+    // Initialize files
+    for (int i = 0; i < nFiles; i++) {
+        files[i].id = i + 1;
+        files[i].deleted = 0;
+        files[i].readers = 0;
+        files[i].writerActive = 0;
+        pthread_mutex_init(&files[i].fileMutex, NULL);
+        sem_init(&files[i].fileSemaphore, 0, maxConcurrentUsers);
+    }
+
+    printf("Enter user requests in the format 'userId fileId operation arrivalTime'. Type 'STOP' to end input.\n");
+
+    char input[100];
+    while (1) {
+        scanf(" %[^\n]", input);
+        if (strcmp(input, "STOP") == 0) {
+            break;
+        }
+        int userId, fileId, arrivalTime;
+        char operation[10];
+        sscanf(input, "%d %d %s %d", &userId, &fileId, operation, &arrivalTime);
+        
+        requestQueue[requestCount++] = (Request){userId, fileId, "", arrivalTime};
+        strcpy(requestQueue[requestCount - 1].operation, operation);
+    }
+
+    simulateLazy();
+
+    for (int i = 0; i < nFiles; i++) {
+        pthread_mutex_destroy(&files[i].fileMutex);
+        sem_destroy(&files[i].fileSemaphore);
     }
 
     return 0;
