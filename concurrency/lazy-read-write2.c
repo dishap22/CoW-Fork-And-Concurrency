@@ -55,12 +55,13 @@ void *process_request(void *arg) {
     int operation_time = strcmp(req->operation, "READ") == 0 ? r_time :
                          strcmp(req->operation, "WRITE") == 0 ? w_time : d_time;
 
+    // Loop until the lock is acquired or max_wait_time is exceeded
     while (sem_trywait(&file_locks[req->file_id - 1]) != 0) {
-        sleep(1);
+        sleep(1);  // Wait 1 second between retries
         wait_time++;
-        if (wait_time > max_wait_time) {
+        if (wait_time > max_wait_time) {  // Check if max wait time has been exceeded
             printUserCancelled(req->user_id, req->request_time + wait_time);
-            pthread_exit(NULL);
+            pthread_exit(NULL);  // Exit the thread if the user cancels
         }
     }
 
