@@ -25,11 +25,16 @@ typedef struct {
 unsigned int hash_string(const char *str) {
     unsigned int hash = 0;
     int constant = 31;
+    int length = 4;
     unsigned int power = 1;
+
+    for (int i = 0; i < length - 1; i++) {
+        power *= constant;
+    }
 
     for (int i = 0; str[i] != '\0'; i++) {
         hash += str[i] * power;
-        power *= constant;
+        power /= constant;
     }
 
     return hash;
