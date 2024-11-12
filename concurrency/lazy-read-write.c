@@ -44,6 +44,16 @@ sem_t file_write_semaphores[MAX_FILES];
 int file_status[MAX_FILES];
 int userqueue[MAX_FILES];
 
+
+int compare_requests(const void *a, const void *b) {
+    Request *req1 = (Request *)a;
+    Request *req2 = (Request *)b;
+    if (req1->request_time != req2->request_time)
+        return req1->request_time - req2->request_time;
+    return req1->operation[0] - req2->operation[0];
+}
+
+
 void* process_read(void* arg) {
     Request* req = (Request*)arg;
     if (file_status[req->file_id] == 2) {
@@ -55,24 +65,31 @@ void* process_read(void* arg) {
     userqueue[req->file_id]++;
     pthread_mutex_unlock(&file_mutexes[req->file_id]);
 
-    struct timespec ts;
+    struct timespec ts,start,current;
+    clock_gettime(CLOCK_REALTIME, &start);
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec += req->maxtime;
     ts.tv_nsec = 0;
 
-    printf(PINK "LAZY has taken up the request of User %d at %d seconds\n" RESET, req->user_id, req->request_time + 1);
+    //printf(PINK "LAZY has taken up the request of User %d at %d seconds\n" RESET, req->user_id, req->request_time + 1);
     sleep(1);
 
     if (sem_timedwait(&file_semaphores[req->file_id], &ts) == -1) {
-        printf(RED "Read request by User %d timed out.\n" RESET, req->user_id);
+        clock_gettime(CLOCK_REALTIME,&current);
+        printf(RED "User %d cancelled their request due to no response at %d seconds.\n" RESET, req->user_id,req->request_time + current.tv_sec - start.tv_sec);
         pthread_mutex_lock(&file_mutexes[req->file_id]);
         userqueue[req->file_id]--;
         pthread_mutex_unlock(&file_mutexes[req->file_id]);
         return NULL;
     }
 
+    //struct timespec current;
+    clock_gettime(CLOCK_REALTIME,&current);
+    printf(PINK "LAZY has taken up the request of User %d at %d seconds\n" RESET, req->user_id, req->request_time + (current.tv_sec - start.tv_sec));
+
     sleep(req->process_time);
-    printf(GREEN "The request for User %d was completed at %d seconds\n" RESET, req->user_id, req->request_time + 1 + req->process_time);
+    clock_gettime(CLOCK_REALTIME,&current);
+    printf(GREEN "The request for User %d was completed at %d seconds\n" RESET, req->user_id, req->request_time + current.tv_sec - start.tv_sec);
     sem_post(&file_semaphores[req->file_id]);
 
     pthread_mutex_lock(&file_mutexes[req->file_id]);
@@ -95,16 +112,18 @@ void* process_write(void* arg) {
     userqueue[req->file_id]++;
     pthread_mutex_unlock(&file_mutexes[req->file_id]);
 
-    struct timespec ts;
+    struct timespec ts,current,start;
+    clock_gettime(CLOCK_REALTIME,&start);
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec += req->maxtime;
     ts.tv_nsec = 0;
 
-    printf(PINK "LAZY has taken up the request of User %d at %d seconds\n" RESET, req->user_id, req->request_time + 1);
+    //printf(PINK "LAZY has taken up the request of User %d at %d seconds\n" RESET, req->user_id, req->request_time + 1);
     sleep(1);
 
     if (sem_timedwait(&file_semaphores[req->file_id], &ts) == -1) {
-        printf(RED "Write request by User %d timed out while waiting for file semaphore.\n" RESET, req->user_id);
+        clock_gettime(CLOCK_REALTIME,&current);
+        printf(RED "User %d cancelled their request due to no response at %d seconds.\n" RESET, req->user_id,req->request_time + current.tv_sec - start.tv_sec);
         pthread_mutex_lock(&file_mutexes[req->file_id]);
         userqueue[req->file_id]--;
         pthread_mutex_unlock(&file_mutexes[req->file_id]);
@@ -112,7 +131,8 @@ void* process_write(void* arg) {
     }
 
     if (sem_timedwait(&file_write_semaphores[req->file_id], &ts) == -1) {
-        printf(RED "Write request by User %d timed out while waiting for write semaphore.\n" RESET, req->user_id);
+        clock_gettime(CLOCK_REALTIME,&current);
+        printf(RED "User %d cancelled their request due to no response at %d seconds.\n" RESET, req->user_id,req->request_time + current.tv_sec - start.tv_sec);
         sem_post(&file_semaphores[req->file_id]);
         pthread_mutex_lock(&file_mutexes[req->file_id]);
         userqueue[req->file_id]--;
@@ -120,10 +140,15 @@ void* process_write(void* arg) {
         return NULL;
     }
 
-    file_status[req->file_id] = 1;
+
+    clock_gettime(CLOCK_REALTIME,&current);
+    printf(PINK "LAZY has taken up the request of User %d at %d seconds\n" RESET, req->user_id, req->request_time + current.tv_sec - start.tv_sec);
+
+    //file_status[req->file_id] = 1;
     sleep(req->process_time);
-    printf(GREEN "The request for User %d was completed at %d seconds\n" RESET, req->user_id, req->request_time + 1 + req->process_time);
-    file_status[req->file_id] = 0;
+    clock_gettime(CLOCK_REALTIME,&current);
+    printf(GREEN "The request for User %d was completed at %d seconds\n" RESET, req->user_id, req->request_time + current.tv_sec-start.tv_sec);
+    //file_status[req->file_id] = 0;
     sem_post(&file_write_semaphores[req->file_id]);
     sem_post(&file_semaphores[req->file_id]);
 
@@ -138,28 +163,34 @@ void* process_write(void* arg) {
 
 void* process_delete(void* arg) {
     Request* req = (Request*)arg;
-    struct timespec ts;
+    struct timespec ts,current,start;
+    clock_gettime(CLOCK_REALTIME,&start);
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec += req->maxtime;
+    //printf("Debug %d\n",req->maxtime);
     ts.tv_nsec = 0;
 
     sleep(1);
-
+    //clock_gettime(CLOCK_REALTIME, &);
+    
     pthread_mutex_lock(&file_mutexes[req->file_id]);
     while (userqueue[req->file_id] > 0) {
-        if (pthread_cond_timedwait(&file_conditions[req->file_id], &file_mutexes[req->file_id], &ts) < 0) {
-            printf(RED "Delete request by User %d timed out.\n" RESET, req->user_id);
+        if (pthread_cond_timedwait(&file_conditions[req->file_id], &file_mutexes[req->file_id], &ts) == ETIMEDOUT) {
+            clock_gettime(CLOCK_REALTIME,&current);
+            printf(RED "User %d cancelled their request due to no response at %d seconds.\n" RESET, req->user_id,req->request_time + current.tv_sec - start.tv_sec);
             pthread_mutex_unlock(&file_mutexes[req->file_id]);
             return NULL;
         }
     }
-
+    clock_gettime(CLOCK_REALTIME,&current);
+    printf(PINK "LAZY has taken up the request of User %d at %d seconds\n" RESET, req->user_id, req->request_time + current.tv_sec - start.tv_sec);
     if (file_status[req->file_id] == 0) {
-        printf(PINK "LAZY has taken up the request of User %d at %d seconds\n" RESET, req->user_id, req->request_time + 1);
+        //printf(PINK "LAZY has taken up the request of User %d at %d seconds\n" RESET, req->user_id, req->request_time + 1);
         file_status[req->file_id] = 2;
         sleep(req->process_time);
         printf("File %d has been deleted.\n", req->file_id);
-        printf(GREEN "The request for User %d was completed at %d seconds\n" RESET, req->user_id, req->request_time + 1 + req->process_time);
+        clock_gettime(CLOCK_REALTIME,&current);
+        printf(GREEN "The request for User %d was completed at %d seconds\n" RESET, req->user_id, req->request_time + current.tv_sec-start.tv_sec);
     }
     pthread_mutex_unlock(&file_mutexes[req->file_id]);
 
@@ -172,12 +203,18 @@ void* process_request(void* arg) {
     pthread_t threads[MAX_REQUESTS];
     int prevtime = 0;
 
+    qsort(lazy->requests, lazy->request_count, sizeof(Request), compare_requests);
+
     for (int i = 0; i < lazy->request_count; i++) {
         Request* req = &lazy->requests[i];
         int duration = (lazy->requests[i].request_time - prevtime);
         if(duration>0)sleep(duration);
         printf(YELLOW "User %d has made request for performing %s on file %d at %d seconds\n" RESET, req->user_id, req->operation, req->file_id, req->request_time);
-
+        if(req->file_id>lazy->num_files){
+            printf("User has been declined due to requesting an invalid file\n");
+            prevtime = lazy->requests[i].request_time;
+            continue;
+        }
         if (strcmp(req->operation, "READ") == 0) {
             req->process_time = lazy->read_time;
             pthread_create(&threads[i], NULL, process_read, (void*)req);
@@ -188,11 +225,17 @@ void* process_request(void* arg) {
             req->process_time = lazy->delete_time;
             pthread_create(&threads[i], NULL, process_delete, (void*)req);
         }
+        else{
+            printf("User has requested an invalid operation and thus been declined at %d seconds\n",req->user_id,req->request_time);
+        }
         prevtime = lazy->requests[i].request_time;
     }
 
     for (int i = 0; i < lazy->request_count; i++) {
-        pthread_join(threads[i], NULL);
+        if(lazy->requests[i].file_id<=lazy->num_files){
+            if((strcmp(lazy->requests[i].operation, "DELETE") == 0)||(strcmp(lazy->requests[i].operation, "READ") == 0)||(strcmp(lazy->requests[i].operation, "WRITE") == 0))
+            pthread_join(threads[i], NULL);
+        }
     }
 
     printf("LAZY has no more pending requests and is going back to sleep!\n");
@@ -206,7 +249,7 @@ int main() {
     printf("Enter number of files, max concurrent users, max wait time: ");
     scanf("%d %d %d", &lazy.num_files, &lazy.max_concurrent, &lazy.max_wait_time);
 
-    for (int i = 0; i < lazy.num_files; i++) {
+    for (int i = 0; i <= lazy.num_files; i++) {
         pthread_mutex_init(&file_mutexes[i], NULL);
         pthread_cond_init(&file_conditions[i], NULL);
         sem_init(&file_semaphores[i], 0, lazy.max_concurrent);
